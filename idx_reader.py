@@ -1,5 +1,10 @@
-#! /bin/python
+#! python3
 import io
+# import logging
+
+# logging.basicConfig(level=logging.DEBUG, 
+# 					format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 class InputError(Exception):
 	"""docstring for InputError"""
@@ -13,6 +18,102 @@ class Entry(object):
 
 	def __repr__(self):
 		return self.word_str
+
+
+class ByteStreamReader(object):
+	"""docstring for UnicodeReader"""
+
+	class EOFError(Exception):
+		pass
+			
+
+	def __init__(self, filename) :
+		self.filename = filename
+		self.file = open(filename, "rb")
+		self.EOF = False
+
+	def __del__(self):
+		if self.file:
+			self.file.close()
+
+	def _count_leading_ones(self, byte):
+		result = 0
+		number = int.from_bytes(byte, byteorder='big')
+		for i in range(8):
+			if (number >> (7 - i)) & 1:
+				result += 1
+			else:
+				break
+		return result
+
+
+	def read_byte(self):
+		result = self.file.read(1)
+
+		if result == b'':
+			self.EOF = True
+		return result
+	
+	def read_n_bytes(self, n=1):
+		byte_array = b''
+		for i in range(4):
+			byte_array += self.read_byte()
+		return byte_array
+
+	def read_unicode_literal(self):
+		byte = self.read_byte()				
+		byte_array = byte
+		num_of_ones = self._count_leading_ones(byte)
+
+		# This is done due to utf-8 specification.
+		# A literal can be consisted from up to 4 bytes.
+		# The number of bytes is encoded in the first byte.
+		# That is:
+		# 0xxxxxxx - 1 byte
+		# 110xxxxx - 2 bytes
+		# 1110xxxx - 3 bytes
+		# 11110xxx - 4 bytes
+		if num_of_ones != 0:
+			num_of_ones -= 1
+
+		for i in range(num_of_ones):
+			# print(byte)
+			byte = self.read_byte()
+			byte_array += byte
+
+		return byte_array.decode(encoding="utf-8")
+
+	def read_unicode_string(self, delimeter=u'\n'):
+		result = u''
+		while True:
+			literal = self.read_unicode_literal()
+			if literal and literal != delimeter:
+				result += literal
+			else:
+				break
+
+		return result
+
+	def read_int32(self):
+		# TODO:
+		# I'm hesitant about how bytes are converted to integer value
+		# If the first byte in the array begins with 1, does it mean 
+		# that the result is going to be negative?
+		# So I just added a leading zero byte here. Just in case.
+		# I should hack this later.
+		if self.EOF:
+			return None
+
+		byte_array = self.read_n_bytes(n=4)
+		return int.from_bytes(b'\0' + byte_array, byteorder="big")
+
+	def read_int64(self):
+		# I should fix this
+		if self.EOF:
+			return None
+
+		byte_array = self.read_n_bytes(n=8)
+		return int.from_bytes(b'\0' + byte_array, byteorder="big")
 
 
 class InfoParser(object):
@@ -56,7 +157,8 @@ class InfoParser(object):
 
 		for line in fin:
 			line = line.strip()
-			if line == "": continue
+			if line == "": 
+				continue
 
 			try:			
 				option, option_body = line.split("=", maxsplit=1)
@@ -84,6 +186,7 @@ class InfoParser(object):
 			value = getattr(self, option)
 			if value != None: 
 				result[option] = value
+		return result	
 
 	# this is done in case if someone reimplements parse method
 	_parse = parse
@@ -97,98 +200,65 @@ class IndexParser(object):
 	"""IdxParser"""
 
 	def __init__(self, info, idx_filename):
-		super(IdxParser, self).__init__()
+		super(IndexParser, self).__init__()
 		self.info = info
 		self.filename = idx_filename
+		self.byte_reader = ByteStreamReader(idx_filename)
+		self.index = []
+		self._parse()
+
+	def _read_word_string(self):
+		return self.byte_reader.read_unicode_string(delimeter=u'\0')
+
+	def _read_data_offset(self):
+		result = 0
+		if "idxoffsetbits" in self.info and self.info["idxoffsetbits"] == 64:
+			result = self.byte_reader.read_int64()
+		else:
+			result = self.byte_reader.read_int32()
+		return result
+
+	def _read_data_size(self):
+		return self.byte_reader.read_int32()
+
+	def parse(self):
+		while not self.byte_reader.EOF:
+			word_str = self._read_word_string()
+			data_offset = self._read_data_offset()
+			data_size = self._read_data_size()
+
+			if data_size != None:
+				self.index.append( (word_str, data_offset, data_size) )
+			else:
+				break
+		
+	def get_index(self):
+		return self.index[:]
+
+	_parse = parse
 
 
-	class ByteStreamReader(object):
-		"""docstring for UnicodeReader"""
-
-		def __init__(self, filename) :
-			self.filename = filename
-			self.file = open(filename, "rb")
-
-		def __del__(self):
-			if self.file:
-				self.file.close()
-
-		def count_leading_ones(self, byte):
-			result = 0
-			number = int.from_bytes(byte, byteorder='big')
-			for i in range(8):
-				if (number >> (7 - i)) & 1:
-					result += 1
-				else:
-					break
-			return result
-
-
-		def read_byte(self):
-			result = self.file.read(1)
-			return result
-
-		def read_n_bytes(self, n=1)
-			byte_array = b''
-			for i in range(4):
-				byte_array += self.read_byte()
-			return byte_array
-
-		def read_unicode_literal(self):
-			byte = self.read_byte()				
-			byte_array = byte
-			num_of_ones = self.count_leading_ones(byte)
-
-			# This is done due to utf-8 specification.
-			# A literal can be consisted from up to 4 bytes.
-			# The number of bytes is encoded in the first byte.
-			# That is:
-			# 0xxxxxxx - 1 byte
-			# 110xxxxx - 2 bytes
-			# 1110xxxx - 3 bytes
-			# 11110xxx - 4 bytes
-			if num_of_ones != 0:
-				num_of_ones -= 1
-
-			for i in range(num_of_ones):
-				print(byte)
-				byte = self.read_byte()
-				byte_array += byte
-
-			return byte_array.decode(encoding="utf-8")
-
-		def read_unicode_string(self, delimeter=u'\n'):
-			result = u''
-			while True:
-				literal = self.read_unicode_literal()
-				if literal and literal != delimeter:
-					result += literal
-				else:
-					break
-
-			return result
-
-		def read_int32(self):
-			# TODO:
-			# I'm hesitant about how bytes are converted to integer value
-			# If the first byte in the array begins with 1, does it mean 
-			# that the result is going to be negative?
-			# So I just added a leading zero byte here. Just in case.
-			# I should hack this later.
-			byte_array = b'0' + self.read_n_bytes(n=4)
-			return int.from_bytes(byte_array, byteorder="big")
-
-		def read_int64(self):
-			byte_array = b'0' + self.read_n_bytes(n=8)
-			return int.from_bytes(byte_array, byteorder="big")
+	
 			
 
 
 
 
-info = InfoParser("./dictionaries/RuKrRu.ifo").get_info
+info = InfoParser("./dictionaries/RuKrRu.ifo").get_info()
+print(info)
+# reader = ByteStreamReader("./hello.txt")
+# print(reader.read_unicode_string(delimeter=u'\0'))
+# print(reader.read_int32())
+# print(reader.read_int32())
+# print(reader.read_int32())
+# print(reader.read_unicode_string())
+index = IndexParser(info, "./dictionaries/RuKrRu.idx").get_index()
 
-reader = IndexParser.ByteStreamReader("./hello.txt")
-print(reader.read_unicode_string(delimeter=u'\0'))
+count = 0
+for i in index:
+	print("{0:8}   {1:8}   {2}".format(i[1], i[2], i[0]))
+	count += 1
+	if count == 20:
+		break
 # print(info.version)
 # print(info.wordcount)
