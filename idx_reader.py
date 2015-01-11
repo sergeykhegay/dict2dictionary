@@ -20,6 +20,31 @@ class Entry(object):
 		return self.word_str
 
 
+class ByteStream(object):
+	"""A simple wrapper for bytes"""
+	def __init__(self, bytes):
+		super(ByteStream, self).__init__()
+		self.bytes = bytes
+		
+		assert(type(bytes)==type(b''), "Must be initialized by bytes")
+
+	def readall():
+		result = self.bytes[:]
+		self.bytes = b''
+		return result[:]
+
+	def read(n=-1):
+		result = b''
+		if n == -1:
+			result = self.readall()
+		else:
+			result = self.bytes[:n]
+			self.bytes = self.bytes[n:]
+
+		return result
+
+		
+
 class ByteStreamReader(object):
 	"""docstring for UnicodeReader"""
 
@@ -46,7 +71,6 @@ class ByteStreamReader(object):
 				break
 		return result
 
-
 	def read_byte(self):
 		result = self.file.read(1)
 
@@ -60,7 +84,11 @@ class ByteStreamReader(object):
 			byte_array += self.read_byte()
 		return byte_array
 
-	def read_unicode_literal(self):
+	def read_unicode_literal(self, count=[0]):
+		"""Reads a utf-8 literal from stream.
+
+		count variable is set to the number of bytes read
+		"""
 		byte = self.read_byte()				
 		byte_array = byte
 		num_of_ones = self._count_leading_ones(byte)
@@ -75,18 +103,23 @@ class ByteStreamReader(object):
 		# 11110xxx - 4 bytes
 		if num_of_ones != 0:
 			num_of_ones -= 1
+		assert num_of_ones in [0, 1, 2, 3], "Not a unicode literal?"
 
 		for i in range(num_of_ones):
-			# print(byte)
 			byte = self.read_byte()
 			byte_array += byte
 
+		count[0] = len(byte_array)
 		return byte_array.decode(encoding="utf-8")
 
-	def read_unicode_string(self, delimeter=u'\n'):
+	def read_unicode_string(self, delimeter=u'\n', count=[0]):
 		result = u''
+
+		count = [0]
 		while True:
-			literal = self.read_unicode_literal()
+			count_tmp = [0]
+			literal = self.read_unicode_literal(count=count_tmp)
+			count[0] += count_tmp[0]
 			if literal and literal != delimeter:
 				result += literal
 			else:
@@ -94,26 +127,30 @@ class ByteStreamReader(object):
 
 		return result
 
-	def read_int32(self):
+	def read_int32(self, count=[0]):
 		# TODO:
 		# I'm hesitant about how bytes are converted to integer value
 		# If the first byte in the array begins with 1, does it mean 
 		# that the result is going to be negative?
 		# So I just added a leading zero byte here. Just in case.
 		# I should hack this later.
+		#
+		# Update: I found signed parameter.
 		if self.EOF:
 			return None
 
 		byte_array = self.read_n_bytes(n=4)
-		return int.from_bytes(b'\0' + byte_array, byteorder="big")
+		count[0] = len(byte_array)
+		return int.from_bytes(b'\0' + byte_array, byteorder="big", signed=False)
 
-	def read_int64(self):
+	def read_int64(self, count=[0]):
 		# I should fix this
 		if self.EOF:
 			return None
 
 		byte_array = self.read_n_bytes(n=8)
-		return int.from_bytes(b'\0' + byte_array, byteorder="big")
+		count[0] = len(byte_array)
+		return int.from_bytes(b'\0' + byte_array, byteorder="big", signed=False)
 
 
 class InfoParser(object):
@@ -193,9 +230,6 @@ class InfoParser(object):
 	_valid = valid
 
 
-class DataParser(object):
-	pass
-
 class IndexParser(object):
 	"""IdxParser"""
 
@@ -238,12 +272,13 @@ class IndexParser(object):
 	_parse = parse
 
 
+class DataParser(object):
+	def __init__(self, info):
+		super(DataParser, self).__init__()
+		self.info = info
+	
 	
 			
-
-
-
-
 info = InfoParser("./dictionaries/RuKrRu.ifo").get_info()
 print(info)
 # reader = ByteStreamReader("./hello.txt")
