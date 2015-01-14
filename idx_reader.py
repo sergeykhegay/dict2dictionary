@@ -10,15 +10,6 @@ class InputError(Exception):
 	"""docstring for InputError"""
 	pass	
 
-class Entry(object):
-	def __init__(self, string=None, offset=None, size=None):
-		self.word_str = None
-		self.word_offset = 0
-		self.word_size = 0
-
-	def __repr__(self):
-		return self.word_str
-
 
 class ByteStream(object):
 	"""A simple wrapper for bytes"""
@@ -26,14 +17,14 @@ class ByteStream(object):
 		super(ByteStream, self).__init__()
 		self.bytes = bytes
 		
-		assert(type(bytes)==type(b''), "Must be initialized by bytes")
+		assert type(bytes) == type(b''), "Must be initialized by bytes"
 
-	def readall():
+	def readall(self):
 		result = self.bytes[:]
 		self.bytes = b''
-		return result[:]
+		return result
 
-	def read(n=-1):
+	def read(self, n=-1):
 		result = b''
 		if n == -1:
 			result = self.readall()
@@ -44,7 +35,6 @@ class ByteStream(object):
 		return result
 
 		
-
 class ByteStreamReader(object):
 	"""docstring for UnicodeReader"""
 
@@ -52,14 +42,9 @@ class ByteStreamReader(object):
 		pass
 			
 
-	def __init__(self, filename) :
-		self.filename = filename
-		self.file = open(filename, "rb")
+	def __init__(self, file_in) :
+		self.file = file_in
 		self.EOF = False
-
-	def __del__(self):
-		if self.file:
-			self.file.close()
 
 	def _count_leading_ones(self, byte):
 		result = 0
@@ -80,7 +65,7 @@ class ByteStreamReader(object):
 	
 	def read_n_bytes(self, n=1):
 		byte_array = b''
-		for i in range(4):
+		for i in range(n):
 			byte_array += self.read_byte()
 		return byte_array
 
@@ -214,8 +199,7 @@ class InfoParser(object):
 	def valid(self):
 		return (self.bookname != None and
 			 	self.wordcount != None and
-			 self.idxfilesize != None and
-			self.sametypesequence != None)
+			 	self.idxfilesize != None)
 
 	def get_info(self):
 		result = {}
@@ -237,9 +221,16 @@ class IndexParser(object):
 		super(IndexParser, self).__init__()
 		self.info = info
 		self.filename = idx_filename
-		self.byte_reader = ByteStreamReader(idx_filename)
+
+		self._fin = open(idx_filename, "rb")
+		self.byte_reader = ByteStreamReader(self._fin)
+
 		self.index = []
 		self._parse()
+
+	def __del__(self):
+		if not self._fin.closed:
+			self._fin.close()
 
 	def _read_word_string(self):
 		return self.byte_reader.read_unicode_string(delimeter=u'\0')
@@ -267,16 +258,68 @@ class IndexParser(object):
 				break
 		
 	def get_index(self):
-		return self.index[:]
+		return self.index
 
 	_parse = parse
 
 
 class DataParser(object):
-	def __init__(self, info):
+	def __init__(self, info, index, byte_reader):
 		super(DataParser, self).__init__()
 		self.info = info
+		self.index = index
+		self.data = []
+		self.byte_reader = byte_reader
+		
+		self.sametypesequence = None
+		if "sametypesequence" in self.info:
+			self.sametypesequence = self.info["sametypesequence"]
+
+		self._parse()
 	
+	def _read_data_type(self):
+		return self.byte_reader.read_unicode_literal()
+
+	def _retrieve_media(self, data_reader):
+		pass
+
+	def _retrieve_text(self, data_reader):
+		result = data_reader.read_unicode_string(delimeter='\0')
+		return result
+
+	def _retrieve_data(self, data_reader, data_type):
+		result = None
+		if data_type in u"mlgtxykwhr":
+			result = (data_type, self._retrieve_text(data_reader))
+		else:
+			result = (data_type, self._retrieve_media(data_reader))
+		return result
+
+	def _parse_data_chunk(self, data_reader):
+		result = []
+		if self.sametypesequence != None:
+			for data_type in self.sametypesequence:
+				result.append(self._retrieve_data(data_reader, data_type))
+		else:	
+			while not data_reader.EOF:
+				data_type = data_reader.read_unicode_literal()
+				result.append(self._retrieve_data(data_reader, data_type))
+		return result	
+
+	def parse(self):
+		for idx in self.index:
+			word_str, data_offset, data_size = idx
+
+			data_chunk = self.byte_reader.read_n_bytes(data_size)
+			data_stream = ByteStream(data_chunk)
+			data_reader = ByteStreamReader(data_stream)
+
+			self.data.append( (word_str, self._parse_data_chunk(data_reader)) )
+
+	def get_data(self):
+		return self.data
+
+	_parse = parse
 	
 			
 info = InfoParser("./dictionaries/RuKrRu.ifo").get_info()
@@ -297,3 +340,22 @@ for i in index:
 		break
 # print(info.version)
 # print(info.wordcount)
+
+fin = open("./dictionaries/RuKrRu.dict", "rb")
+data_parser = DataParser(info, index, ByteStreamReader(fin))
+data = data_parser.get_data()
+
+print("number of entries:", len(data))
+count = 0
+for i in data:
+	word_str, details = i
+	print(word_str)
+	for det in details:
+		print("   type:", det[0])
+		print("        data:", det[1])
+		print()
+	count += 1
+	if count == 20:
+		break
+
+
